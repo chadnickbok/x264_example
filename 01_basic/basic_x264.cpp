@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <string>
+#include <cstdio>
 
 extern "C" {
     #include <x264.h>
@@ -22,6 +23,13 @@ int main(int argc, char *argv[])
     // Frame width and height
     int width, height;
 
+    // Output file
+    FILE *out_file = fopen(argv[1], "wb");
+    if (out_file == NULL) {
+        cout << "Failed to open output file" << endl;
+        return -1;
+    }
+
     // OpenCV
     Mat frame_bgr;
     Mat frame_yuv;
@@ -32,6 +40,11 @@ int main(int argc, char *argv[])
     }
 
     cap >> frame_bgr;
+    imshow("webcam", frame_bgr);
+
+    double freq = getTickFrequency();
+    cout << "freq: " << freq << endl;
+
     width = frame_bgr.cols;
     height = frame_bgr.rows;
 
@@ -46,7 +59,7 @@ int main(int argc, char *argv[])
     int i_nal;
 
     // Get default params
-    if (x264_param_default_preset( &param, "medium", NULL) < 0) {
+    if (x264_param_default_preset( &param, "fast", NULL) < 0) {
         return -1;
     }
 
@@ -56,11 +69,18 @@ int main(int argc, char *argv[])
     param.i_height = height;
     param.b_vfr_input = 0;
     param.b_repeat_headers = 1;
-    param.b_annexb = 1;
+    param.i_bframe = 0;
+
+    param.i_fps_num = 10;
+    param.i_fps_den = 1;
+
+    param.i_timebase_num = 1000;
+    param.i_timebase_den = 1;
 
     if (x264_param_apply_profile(&param, "baseline") < 0) {
         return -1;
     }
+    param.b_annexb = 1;
 
     if (x264_picture_alloc(&pic, param.i_csp, param.i_width, param.i_height) < 0) {
         return -1;
@@ -77,37 +97,31 @@ int main(int argc, char *argv[])
     Mat edges;
     namedWindow("edges", 1);
 
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 10000; i++) {
         cap >> frame_bgr;
         imshow("webcam", frame_bgr);
 
         cvtColor(frame_bgr, frame_yuv, CV_BGR2YUV_I420);
-
-        cout << "cols: " << frame_bgr.cols << endl;
-        cout << "rows: " << frame_bgr.rows << endl;
-        cout << "channels: " << frame_bgr.channels() << endl;
-
-        cout << "y_cols: " << frame_yuv.cols << endl;
-        cout << "y_rows: " << frame_yuv.rows << endl;
-        cout << "y_chans: " << frame_yuv.channels() << endl;
 
         memcpy(pic.img.plane[0], frame_yuv.data, luma_size);
         memcpy(pic.img.plane[1], frame_yuv.data + luma_size, chroma_size);
         memcpy(pic.img.plane[2], frame_yuv.data + luma_size + chroma_size, chroma_size);
 
         pic.i_pts = i;
+        cout << "Cur timestamp: " << pic.i_pts << endl;
+
         frame_size = x264_encoder_encode(enc, &nal, &i_nal, &pic, &pic_out);
         if (frame_size < 0) {
             return -1;
         } else if (frame_size > 0) {
             cout << "Frame size: " << frame_size << endl;
+            fwrite(nal->p_payload, 1, frame_size, out_file);
         }
 
-/*
         if (waitKey(30) >= 0) {
             break;
         }
-*/
+
     }
 
     while (x264_encoder_delayed_frames(enc)) {
@@ -116,11 +130,13 @@ int main(int argc, char *argv[])
             return -1;
         } else if (frame_size > 0) {
             cout << "Frame size: " << frame_size << endl;
+            fwrite(nal->p_payload, frame_size, 1, out_file);
         }
     }
 
     x264_encoder_close(enc);
     x264_picture_clean(&pic);
+    fclose(out_file);
 
     return 0;
 }

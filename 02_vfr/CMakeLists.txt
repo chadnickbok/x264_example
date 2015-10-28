@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 2.8)
+project(VFRExample)
+find_package(OpenCV)
+include_directories( ${OpenCV_INCLUDE_DIRS} )
+add_executable( vfr_demo vfr_demo.cpp )
+target_link_libraries( vfr_demo ${OpenCV_LIBS} -lx264 )

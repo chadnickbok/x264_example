@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 2.8)
+project(BasicX264)
+find_package(OpenCV)
+include_directories( ${OpenCV_INCLUDE_DIRS} )
+add_executable( basic_x264 basic_x264.cpp )
+target_link_libraries( basic_x264 ${OpenCV_LIBS} -lx264 )
