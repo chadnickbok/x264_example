@@ -25,19 +25,12 @@ int main(int argc, char *argv[])
 
     // Output file
     FILE *out_file = fopen(argv[1], "wb");
-    if (out_file == NULL) {
-        cout << "Failed to open output file" << endl;
-        return -1;
-    }
 
-    // OpenCV
+    // OpenCV Data Source
     Mat frame_bgr;
     Mat frame_yuv;
 
     VideoCapture cap(0);
-    if (!cap.isOpened()) {
-        return -1;
-    }
 
     cap >> frame_bgr;
     imshow("webcam", frame_bgr);
@@ -48,95 +41,98 @@ int main(int argc, char *argv[])
     width = frame_bgr.cols;
     height = frame_bgr.rows;
 
-    // x264
-    x264_param_t param;
-    x264_picture_t pic;
-    x264_picture_t pic_out;
-    x264_t *enc;
-
-    int frame_size = 0;
-    x264_nal_t *nal;
-    int i_nal;
+    // x264 Config
+    x264_param_t encoder_config;
 
     // Get default params
-    if (x264_param_default_preset( &param, "fast", NULL) < 0) {
-        return -1;
-    }
+    x264_param_default_preset( &encoder_config, "fast", NULL );
 
     // Non-default params
-    param.i_csp = X264_CSP_I420;
-    param.i_width = width;
-    param.i_height = height;
-    param.b_vfr_input = 0;
-    param.b_repeat_headers = 1;
-    param.i_bframe = 0;
+    encoder_config.i_csp = X264_CSP_I420;
+    encoder_config.i_width = width;
+    encoder_config.i_height = height;
+    encoder_config.b_vfr_input = 0;
+    encoder_config.b_repeat_headers = 1;
 
-    param.i_fps_num = 10;
-    param.i_fps_den = 1;
+    encoder_config.i_fps_num = 10;
+    encoder_config.i_fps_den = 1;
+    
+    encoder_config.b_annexb = 1;
 
-    param.i_timebase_num = 1000;
-    param.i_timebase_den = 1;
+    // Apply a profile
+    x264_param_apply_profile( &encoder_config, "baseline" );
 
-    if (x264_param_apply_profile(&param, "baseline") < 0) {
-        return -1;
-    }
-    param.b_annexb = 1;
 
-    if (x264_picture_alloc(&pic, param.i_csp, param.i_width, param.i_height) < 0) {
-        return -1;
-    }
+    // Initialize the encoder
+    x264_t *encoder = x264_encoder_open(&encoder_config);
 
-    enc = x264_encoder_open(&param);
-    if (!enc) {
-        return -1;
-    }
+    // Setup the input picture
+    x264_picture_t pic_in;
+    x264_picture_alloc( &pic_in, encoder_config.i_csp, encoder_config.i_width, encoder_config.i_height);
 
-    int luma_size = width * height;
+    // Outputs
+    x264_picture_t pic_out;
+    x264_nal_t *nalus;
+
+    int frame_size;
+    int num_nalus;
+
+    // Raw data size
+    int luma_size = encoder_config.i_width * encoder_config.i_height;
     int chroma_size = luma_size / 4;
 
+    // Display our webcam while capturing
     Mat edges;
     namedWindow("edges", 1);
 
-    for (int i = 0; i < 10000; i++) {
+    // Encode frames (max 1000)
+    for (int i = 0; i < 10000; i++)
+    {
+        // Capture a frame 
         cap >> frame_bgr;
         imshow("webcam", frame_bgr);
 
+        // Convert to the right colorspace
         cvtColor(frame_bgr, frame_yuv, CV_BGR2YUV_I420);
 
-        memcpy(pic.img.plane[0], frame_yuv.data, luma_size);
-        memcpy(pic.img.plane[1], frame_yuv.data + luma_size, chroma_size);
-        memcpy(pic.img.plane[2], frame_yuv.data + luma_size + chroma_size, chroma_size);
+        // Copy to our pic_in
+        memcpy( pic_in.img.plane[0], frame_yuv.data, luma_size );
+        memcpy( pic_in.img.plane[1], frame_yuv.data + luma_size, chroma_size );
+        memcpy( pic_in.img.plane[2], frame_yuv.data + luma_size + chroma_size, chroma_size );
 
-        pic.i_pts = i;
-        cout << "Cur timestamp: " << pic.i_pts << endl;
+        // Set the timestamp
+        pic_in.i_pts = i;
+        cout << "Cur timestamp: " << pic_in.i_pts << endl;
 
-        frame_size = x264_encoder_encode(enc, &nal, &i_nal, &pic, &pic_out);
-        if (frame_size < 0) {
-            return -1;
-        } else if (frame_size > 0) {
-            cout << "Frame size: " << frame_size << endl;
-            fwrite(nal->p_payload, 1, frame_size, out_file);
+        // Encode the frame
+        frame_size = x264_encoder_encode( encoder, &nalus, &num_nalus, &pic_in, &pic_out );
+        
+        // Check if we received a frame
+        if ( frame_size > 0 )
+        {
+            fwrite( nalus->p_payload, 1, frame_size, out_file);
         }
 
-        if (waitKey(30) >= 0) {
+        // Stop on keypress
+        if ( waitKey(30) >= 0 )
+        {
             break;
         }
-
     }
 
-    while (x264_encoder_delayed_frames(enc)) {
-        frame_size = x264_encoder_encode(enc, &nal, &i_nal, NULL, &pic_out);
-        if (frame_size < 0) {
-            return -1;
-        } else if (frame_size > 0) {
-            cout << "Frame size: " << frame_size << endl;
-            fwrite(nal->p_payload, frame_size, 1, out_file);
+    // Flush delayed frames
+    while ( x264_encoder_delayed_frames( encoder ))
+    {
+        frame_size = x264_encoder_encode( encoder, &nalus, &num_nalus, NULL, &pic_out );
+        if ( frame_size > 0 )
+        {
+            fwrite( nalus->p_payload, frame_size, 1, out_file );
         }
     }
 
-    x264_encoder_close(enc);
-    x264_picture_clean(&pic);
-    fclose(out_file);
+    x264_encoder_close( encoder );
+    x264_picture_clean( &pic_in );
+    fclose( out_file );
 
     return 0;
 }
